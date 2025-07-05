@@ -1,0 +1,14 @@
+# Dependencies
+node_modules/
+
+# Uploaded files and clips
+uploads/
+clips/
+
+# Environment variables (if you ever add them)
+.env
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
