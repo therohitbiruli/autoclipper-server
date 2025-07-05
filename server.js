@@ -14,7 +14,6 @@ const port = 3000;
 app.use(cors());
 app.use(express.json());
 
-// --- Setup storage ---
 const uploadDir = 'uploads/';
 const clipsDir = 'clips/';
 if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir);
@@ -26,29 +25,41 @@ const storage = multer.diskStorage({
 });
 const upload = multer({ storage: storage });
 
-// --- Video Processing Endpoint ---
+// --- THE NEW ASYNCHRONOUS LOGIC ---
 app.post('/process-video', upload.single('video'), (req, res) => {
-  if (!req.file) return res.status(400).send('No video file uploaded.');
+  if (!req.file) {
+    return res.status(400).send('No video file uploaded.');
+  }
 
-  const clips = JSON.parse(req.body.clips);
-  const inputPath = req.file.path;
-  console.log(`Processing ${inputPath} with clips:`, clips);
+  // 1. Immediately send a success response to the app
+  res.status(202).send('Video received and processing has started in the background.');
+
+  // 2. Start the long FFMPEG process after the response has been sent
+  processVideoInBackground(req.file.path, JSON.parse(req.body.clips));
+});
+
+
+// This function runs in the background and does the heavy lifting
+function processVideoInBackground(inputPath, clips) {
+  console.log(`Starting background processing for ${inputPath}`);
+  console.log('Clips to process:', clips);
 
   let processedCount = 0;
   const totalClips = clips.length;
 
-  if (totalClips === 0) return res.status(400).send('No timestamps provided.');
+  if (totalClips === 0) {
+      console.log("No clips to process. Deleting original file.");
+      fs.unlinkSync(inputPath);
+      return;
+  }
 
   clips.forEach((clip, index) => {
     const outputFilename = `${clip.name.replace(/\s+/g, '-')}-${Date.now()}.mp4`;
     const outputPath = path.join(clipsDir, outputFilename);
 
-    console.log(`Creating clip: ${clip.name} from ${clip.start} to ${clip.end}`);
-
-    // This logic now mirrors your Python script
     ffmpeg(inputPath)
       .setStartTime(clip.start)
-      .setDuration(timeToSeconds(clip.end) - timeToSeconds(clip.start)) // Calculate duration from start/end times
+      .setDuration(timeToSeconds(clip.end) - timeToSeconds(clip.start))
       .videoCodec('libx264')
       .addOutputOption('-preset', 'veryfast')
       .addOutputOption('-crf', '23')
@@ -57,33 +68,28 @@ app.post('/process-video', upload.single('video'), (req, res) => {
         console.log(`Finished processing ${outputFilename}`);
         processedCount++;
         if (processedCount === totalClips) {
+          console.log('All background clips processed. Deleting original file.');
           fs.unlinkSync(inputPath); // Clean up original video
-          res.status(200).send('All clips processed successfully!');
         }
       })
       .on('error', (err) => {
         console.error(`Error processing ${outputFilename}:`, err.message);
-        processedCount++; // Increment even on error to avoid hanging
+        processedCount++; // Still increment to allow cleanup
         if (processedCount === totalClips) {
-            fs.unlinkSync(inputPath); // Clean up
-            res.status(500).send('An error occurred while processing one or more clips.');
+          console.log('Finished background processing with errors. Deleting original file.');
+          fs.unlinkSync(inputPath); // Clean up original video
         }
       })
       .save(outputPath);
   });
-});
-
-// Helper function to convert HH:MM:SS string to seconds
-function timeToSeconds(time) {
-  const parts = time.split(':').map(Number);
-  if (parts.length === 3) {
-    return parts[0] * 3600 + parts[1] * 60 + parts[2];
-  } else if (parts.length === 2) {
-    return parts[0] * 60 + parts[1];
-  }
-  return Number(time); // Fallback for raw seconds
 }
 
+function timeToSeconds(time) {
+  const parts = time.split(':').map(Number);
+  if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2];
+  if (parts.length === 2) return parts[0] * 60 + parts[1];
+  return Number(time);
+}
 
 app.listen(port, () => {
   console.log(`✅ Server is running at http://localhost:${port}`);
